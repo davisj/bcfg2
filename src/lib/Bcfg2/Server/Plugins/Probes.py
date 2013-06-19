@@ -12,6 +12,7 @@ import Bcfg2.Server.Plugin
 
 try:
     from django.db import models
+    from django.core.exceptions import MultipleObjectsReturned
     HAS_DJANGO = True
 
     class ProbesDataModel(models.Model,
@@ -254,13 +255,13 @@ class Probes(Bcfg2.Server.Plugin.Probing,
             try:
                 ProbesGroupsModel.objects.get_or_create(
                     hostname=client.hostname,
-                    group=group).save()
-            except ProbesGroupsModel.MultipleObjectsReturned:
+                    group=group)
+            except MultipleObjectsReturned:
                 ProbesGroupsModel.objects.filter(hostname=client.hostname,
                                                  group=group).delete()
                 ProbesGroupsModel.objects.get_or_create(
                     hostname=client.hostname,
-                    group=group).save()
+                    group=group)
         ProbesGroupsModel.objects.filter(
             hostname=client.hostname).exclude(
                 group__in=self.cgroups[client.hostname]).delete()
