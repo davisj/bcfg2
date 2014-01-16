@@ -9,7 +9,8 @@ Build-Depends: debhelper (>= 7.0.50~),
 	       python-sphinx (>= 1.0.7+dfsg) | python3-sphinx,
 	       python-lxml,
 	       python-daemon,
-	       python-cherrypy,
+	       python-boto,
+	       python-cherrypy3,
 	       python-gamin,
 	       python-genshi,
 	       python-pyinotify,
@@ -43,7 +44,7 @@ Description: Configuration management server
 
 Package: bcfg2-web
 Architecture: all
-Depends: ${python:Depends}, ${misc:Depends}, bcfg2-server (= ${binary:Version}), python-django,
+Depends: ${python:Depends}, ${misc:Depends}, bcfg2-server (= ${binary:Version}), python-django, python-django-south (>= 0.7.5)
 Suggests: python-mysqldb, python-psycopg2, python-sqlite, libapache2-mod-wsgi
 Description: Configuration management web interface
  Bcfg2 is a configuration management system that generates configuration sets

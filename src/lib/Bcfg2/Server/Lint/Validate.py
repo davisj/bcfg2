@@ -47,6 +47,7 @@ class Validate(Bcfg2.Server.Lint.ServerlessPlugin):
              "Decisions/*.xml": "decisions.xsd",
              "Packages/sources.xml": "packages.xsd",
              "GroupPatterns/config.xml": "grouppatterns.xsd",
+             "AWSTags/config.xml": "awstags.xsd",
              "NagiosGen/config.xml": "nagiosgen.xsd",
              "FileProbes/config.xml": "fileprobes.xsd",
              "SSLCA/**/cert.xml": "sslca-cert.xsd",
@@ -83,6 +84,7 @@ class Validate(Bcfg2.Server.Lint.ServerlessPlugin):
                 "xml-failed-to-parse": "error",
                 "xml-failed-to-read": "error",
                 "xml-failed-to-verify": "error",
+                "xinclude-does-not-exist": "error",
                 "input-output-error": "error"}
 
     def check_properties(self):
@@ -106,9 +108,17 @@ class Validate(Bcfg2.Server.Lint.ServerlessPlugin):
         :type filename: string
         :returns: lxml.etree._ElementTree - the parsed data"""
         try:
-            return lxml.etree.parse(filename)
-        except SyntaxError:
-            lint = Popen(["xmllint", filename], stdout=PIPE, stderr=STDOUT)
+            xdata = lxml.etree.parse(filename)
+            if self.files is None:
+                self._expand_wildcard_xincludes(xdata)
+                xdata.xinclude()
+            return xdata
+        except (lxml.etree.XIncludeError, SyntaxError):
+            cmd = ["xmllint", "--noout"]
+            if self.files is None:
+                cmd.append("--xinclude")
+            cmd.append(filename)
+            lint = Popen(cmd, stdout=PIPE, stderr=STDOUT)
             self.LintError("xml-failed-to-parse",
                            "%s fails to parse:\n%s" % (filename,
                                                        lint.communicate()[0]))
@@ -118,6 +128,33 @@ class Validate(Bcfg2.Server.Lint.ServerlessPlugin):
             self.LintError("xml-failed-to-read",
                            "Failed to open file %s" % filename)
             return False
+
+    def _expand_wildcard_xincludes(self, xdata):
+        """ a lightweight version of
+        :func:`Bcfg2.Server.Plugin.helpers.XMLFileBacked._follow_xincludes` """
+        xinclude = '%sinclude' % Bcfg2.Server.XI_NAMESPACE
+        for el in xdata.findall('//' + xinclude):
+            name = el.get("href")
+            if name.startswith("/"):
+                fpath = name
+            else:
+                fpath = os.path.join(os.path.dirname(xdata.docinfo.URL), name)
+
+            # expand globs in xinclude, a bcfg2-specific extension
+            extras = glob.glob(fpath)
+            if not extras:
+                msg = "%s: %s does not exist, skipping: %s" % \
+                      (xdata.docinfo.URL, name, self.RenderXML(el))
+                if el.findall('./%sfallback' % Bcfg2.Server.XI_NAMESPACE):
+                    self.logger.debug(msg)
+                else:
+                    self.LintError("xinclude-does-not-exist", msg)
+
+            parent = el.getparent()
+            parent.remove(el)
+            for extra in extras:
+                if extra != xdata.docinfo.URL:
+                    lxml.etree.SubElement(parent, xinclude, href=extra)
 
     def validate(self, filename, schemafile, schema=None):
         """ Validate a file against the given schema.
@@ -140,6 +177,8 @@ class Validate(Bcfg2.Server.Lint.ServerlessPlugin):
             if not schema:
                 return False
         datafile = self.parse(filename)
+        if not datafile:
+            return False
         if not schema.validate(datafile):
             cmd = ["xmllint"]
             if self.files is None:

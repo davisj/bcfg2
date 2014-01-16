@@ -1,5 +1,4 @@
 import os
-import re
 import sys
 import copy
 import lxml.etree
@@ -7,6 +6,7 @@ import Bcfg2.Server
 from Bcfg2.Compat import reduce
 from mock import Mock, MagicMock, patch
 from Bcfg2.Server.Plugin.helpers import *
+from Bcfg2.Server.Plugin.exceptions import PluginInitError
 
 # add all parent testsuite directories to sys.path to allow (most)
 # relative imports in python 2.4
@@ -28,6 +28,7 @@ def tostring(el):
 
 class FakeElementTree(lxml.etree._ElementTree):
     xinclude = Mock()
+    parse = Mock
 
 
 class TestFunctions(Bcfg2TestCase):
@@ -76,6 +77,14 @@ class TestFunctions(Bcfg2TestCase):
 class TestDatabaseBacked(TestPlugin):
     test_obj = DatabaseBacked
 
+    def get_obj(self, core=None):
+        if not HAS_DJANGO:
+            if core is None:
+                core = MagicMock()
+            # disable the database
+            core.setup.cfp.getboolean.return_value = False
+        return TestPlugin.get_obj(self, core=core)
+
     @skipUnless(HAS_DJANGO, "Django not found")
     def test__use_db(self):
         core = Mock()
@@ -90,13 +99,13 @@ class TestDatabaseBacked(TestPlugin):
 
         Bcfg2.Server.Plugin.helpers.HAS_DJANGO = False
         core = Mock()
+        core.setup.cfp.getboolean.return_value = False
         db = self.get_obj(core)
         self.assertFalse(db._use_db)
 
         core = Mock()
         core.setup.cfp.getboolean.return_value = True
-        db = self.get_obj(core)
-        self.assertFalse(db._use_db)
+        self.assertRaises(PluginInitError, self.get_obj, core)
         Bcfg2.Server.Plugin.helpers.HAS_DJANGO = True
 
 
@@ -623,17 +632,9 @@ class TestXMLFileBacked(TestFileBacked):
         self.assertIn("/test/test2.xml", xfb.extra_monitors)
 
         fam = Mock()
-        if self.should_monitor is not True:
-            fam.reset_mock()
-            xfb = self.get_obj(fam=fam)
-            fam.reset_mock()
-            xfb.add_monitor("/test/test3.xml")
-            self.assertFalse(fam.AddMonitor.called)
-            self.assertIn("/test/test3.xml", xfb.extra_monitors)
-
-        if self.should_monitor is not False:
-            fam.reset_mock()
-            xfb = self.get_obj(fam=fam, should_monitor=True)
+        fam.reset_mock()
+        xfb = self.get_obj(fam=fam)
+        if xfb.fam:
             xfb.add_monitor("/test/test4.xml")
             fam.AddMonitor.assert_called_with("/test/test4.xml", xfb)
             self.assertIn("/test/test4.xml", xfb.extra_monitors)
@@ -1131,14 +1132,14 @@ class TestXMLSrc(TestXMLFileBacked):
         # ensure that the node object has the necessary interface
         self.assertTrue(hasattr(self.test_obj.__node__, "Match"))
 
-    @patch("%s.open" % builtins)
-    def test_HandleEvent(self, mock_open):
+    @patch("lxml.etree.parse")
+    def test_HandleEvent(self, mock_parse):
         xdata = lxml.etree.Element("Test")
         lxml.etree.SubElement(xdata, "Path", name="path", attr="whatever")
 
         xsrc = self.get_obj("/test/foo.xml")
         xsrc.__node__ = Mock()
-        mock_open.return_value.read.return_value = tostring(xdata)
+        mock_parse.return_value = xdata.getroottree()
 
         if xsrc.__priority_required__:
             # test with no priority at all
@@ -1147,20 +1148,20 @@ class TestXMLSrc(TestXMLFileBacked):
 
             # test with bogus priority
             xdata.set("priority", "cow")
-            mock_open.return_value.read.return_value = tostring(xdata)
+            mock_parse.return_value = xdata.getroottree()
             self.assertRaises(PluginExecutionError,
-                               xsrc.HandleEvent, Mock())
+                              xsrc.HandleEvent, Mock())
 
             # assign a priority to use in future tests
             xdata.set("priority", "10")
-            mock_open.return_value.read.return_value = tostring(xdata)
+            mock_parse.return_value = xdata.getroottree()
 
-        mock_open.reset_mock()
+        mock_parse.reset_mock()
         xsrc = self.get_obj("/test/foo.xml")
         xsrc.__node__ = Mock()
         xsrc.HandleEvent(Mock())
-        mock_open.assert_called_with("/test/foo.xml")
-        mock_open.return_value.read.assert_any_call()
+        mock_parse.assert_called_with("/test/foo.xml",
+                                      parser=Bcfg2.Server.XMLParser)
         self.assertXMLEqual(xsrc.__node__.call_args[0][0], xdata)
         self.assertEqual(xsrc.__node__.call_args[0][1], dict())
         self.assertEqual(xsrc.pnode, xsrc.__node__.return_value)

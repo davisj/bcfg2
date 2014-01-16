@@ -9,6 +9,7 @@
   </xsd:annotation>
 
   <xsd:include schemaLocation="selinux.xsd"/>
+  <xsd:include schemaLocation="augeas.xsd"/>
   <xsd:import namespace="http://genshi.edgewall.org/"
               schemaLocation="genshi.xsd"/>
 
@@ -41,6 +42,7 @@
 
   <xsd:simpleType name='PathTypeEnum'>
     <xsd:restriction base='xsd:string'>
+      <xsd:enumeration value='augeas' />
       <xsd:enumeration value='device' />
       <xsd:enumeration value='directory' />
       <xsd:enumeration value='file' />
@@ -122,7 +124,10 @@
     <xsd:attribute type='ActionTimingEnum' name='timing'>
       <xsd:annotation>
         <xsd:documentation>
-          When the action is run.
+          When the action is run. Actions with "pre" timing are run
+          after important entries have been installed and before
+          bundle entries are installed. Actions with "post" timing
+          are run after bundle entries are installed.
         </xsd:documentation>
       </xsd:annotation>
     </xsd:attribute>
@@ -130,9 +135,7 @@
       <xsd:annotation>
         <xsd:documentation>
           If the action is always run, or is only run when a bundle
-          has been modified.  Actions that run before bundle
-          installation ("pre" and "both") ignore the setting of
-          ``when`` and are always run regardless.
+          has been modified.
         </xsd:documentation>
       </xsd:annotation>
     </xsd:attribute>
@@ -266,6 +269,8 @@
 
     <xsd:choice minOccurs='0' maxOccurs='unbounded'>
       <xsd:element name='ACL' type='ACLType'/>
+      <xsd:group ref="augeasCommands"/>
+      <xsd:group ref="py:genshiElements"/>
     </xsd:choice>
     <xsd:attribute type="PathTypeEnum" name="type">
       <xsd:annotation>
@@ -335,6 +340,13 @@
         </xsd:documentation>
       </xsd:annotation>
     </xsd:attribute>
+    <xsd:attribute type="xsd:boolean" name="important">
+      <xsd:annotation>
+        <xsd:documentation>
+          Important entries are installed first during client execution.
+        </xsd:documentation>
+      </xsd:annotation>
+    </xsd:attribute>
     <xsd:attribute type="xsd:boolean" name="recursive">
       <xsd:annotation>
         <xsd:documentation>
@@ -383,6 +395,14 @@
       <xsd:annotation>
         <xsd:documentation>
           The VCS URL to checkout.
+        </xsd:documentation>
+      </xsd:annotation>
+    </xsd:attribute>
+    <xsd:attribute type="xsd:token" name="lens">
+      <xsd:annotation>
+        <xsd:documentation>
+          The Augeas lens to use when editing files in a non-standard
+          (according to Augeas) location.
         </xsd:documentation>
       </xsd:annotation>
     </xsd:attribute>

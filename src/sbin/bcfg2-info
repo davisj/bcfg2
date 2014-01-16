@@ -437,7 +437,7 @@ Bcfg2 client itself.""")
         pname, client = alist
         automatch = self.setup.cfp.getboolean("properties", "automatch",
                                               default=False)
-        pfile = self.plugins['Properties'].store.entries[pname]
+        pfile = self.plugins['Properties'].entries[pname]
         if (not force and
             not automatch and
             pfile.xdata.get("automatch", "false").lower() != "true"):
@@ -473,7 +473,6 @@ Bcfg2 client itself.""")
             ('Path Bcfg2 repository', self.setup['repo']),
             ('Plugins', self.setup['plugins']),
             ('Password', self.setup['password']),
-            ('Server Metadata Connector', self.setup['mconnect']),
             ('Filemonitor', self.setup['filemonitor']),
             ('Server address', self.setup['location']),
             ('Path to key', self.setup['key']),
@@ -482,6 +481,17 @@ Bcfg2 client itself.""")
             ('Protocol', self.setup['protocol']),
             ('Logging', self.setup['logging'])]
         print_tabular(output)
+
+    def do_expirecache(self, args):
+        """ expirecache [<hostname> [<hostname> ...]]- Expire the
+        metadata cache """
+        alist = args.split()
+        if len(alist):
+            for client in self._get_client_list(alist):
+                self.expire_caches_by_type(Bcfg2.Server.Plugin.Metadata,
+                                           key=client)
+        else:
+            self.expire_caches_by_type(Bcfg2.Server.Plugin.Metadata)
 
     def do_probes(self, args):
         """ probes [-p] <hostname> - Get probe list for the given
@@ -718,7 +728,7 @@ Bcfg2 client itself.""")
     def run(self, args):  # pylint: disable=W0221
         try:
             self.load_plugins()
-            self.fam.handle_events_in_interval(1)
+            self.block_for_fam_events(handle_events=True)
             if args:
                 self.onecmd(" ".join(args))
             else:
@@ -759,7 +769,8 @@ USAGE = build_usage()
 def main():
     optinfo = dict(profile=Bcfg2.Options.CORE_PROFILE,
                    interactive=Bcfg2.Options.INTERACTIVE,
-                   interpreter=Bcfg2.Options.INTERPRETER)
+                   interpreter=Bcfg2.Options.INTERPRETER,
+                   command_timeout=Bcfg2.Options.CLIENT_COMMAND_TIMEOUT)
     optinfo.update(Bcfg2.Options.INFO_COMMON_OPTIONS)
     setup = Bcfg2.Options.OptionParser(optinfo)
     setup.hm = "\n".join(["     bcfg2-info [options] [command <command args>]",

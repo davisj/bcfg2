@@ -10,6 +10,7 @@ import lxml.etree
 import Bcfg2.Options
 import Bcfg2.Server.Plugin
 import Bcfg2.Server.Lint
+from fnmatch import fnmatch
 from Bcfg2.Server.Plugin import PluginExecutionError
 # pylint: disable=W0622
 from Bcfg2.Compat import u_str, unicode, b64encode, walk_packages, \
@@ -100,6 +101,8 @@ class CfgBaseFileMatcher(Bcfg2.Server.Plugin.SpecificData,
     experimental = False
 
     def __init__(self, name, specific, encoding):
+        if not self.__specific__ and not specific:
+            specific = Bcfg2.Server.Plugin.Specificity(all=True)
         Bcfg2.Server.Plugin.SpecificData.__init__(self, name, specific,
                                                   encoding)
         Bcfg2.Server.Plugin.Debuggable.__init__(self)
@@ -898,6 +901,7 @@ class CfgLint(Bcfg2.Server.Lint.ServerPlugin):
             self.check_delta(basename, entry)
             self.check_pubkey(basename, entry)
         self.check_missing_files()
+        self.check_conflicting_handlers()
 
     @classmethod
     def Errors(cls):
@@ -905,7 +909,8 @@ class CfgLint(Bcfg2.Server.Lint.ServerPlugin):
                 "diff-file-used": "warning",
                 "no-pubkey-xml": "warning",
                 "unknown-cfg-files": "error",
-                "extra-cfg-files": "error"}
+                "extra-cfg-files": "error",
+                "multiple-global-handlers": "error"}
 
     def check_delta(self, basename, entry):
         """ check that no .cat or .diff files are in use """
@@ -940,22 +945,55 @@ class CfgLint(Bcfg2.Server.Lint.ServerPlugin):
                                "%s has no corresponding pubkey.xml at %s" %
                                (basename, pubkey))
 
+    def _list_path_components(self, path):
+        """ Get a list of all components of a path.  E.g.,
+        ``self._list_path_components("/foo/bar/foobaz")`` would return
+        ``["foo", "bar", "foo", "baz"]``.  The list is not guaranteed
+        to be in order."""
+        rv = []
+        remaining, component = os.path.split(path)
+        while component != '':
+            rv.append(component)
+            remaining, component = os.path.split(remaining)
+        return rv
+
+    def check_conflicting_handlers(self):
+        """ Check that a single entryset doesn't have multiple
+        non-specific (i.e., 'all') handlers. """
+        cfg = self.core.plugins['Cfg']
+        for eset in cfg.entries.values():
+            alls = [e for e in eset.entries.values()
+                    if (e.specific.all and
+                        issubclass(e.__class__, CfgGenerator))]
+            if len(alls) > 1:
+                self.LintError("multiple-global-handlers",
+                               "%s has multiple global handlers: %s" %
+                               (eset.path, ", ".join(os.path.basename(e.name)
+                                                     for e in alls)))
+
     def check_missing_files(self):
         """ check that all files on the filesystem are known to Cfg """
         cfg = self.core.plugins['Cfg']
 
         # first, collect ignore patterns from handlers
-        ignore = []
+        ignore = set()
         for hdlr in handlers():
-            ignore.extend(hdlr.__ignore__)
+            ignore.update(hdlr.__ignore__)
 
         # next, get a list of all non-ignored files on the filesystem
         all_files = set()
         for root, _, files in os.walk(cfg.data):
-            all_files.update(os.path.join(root, fname)
-                             for fname in files
-                             if not any(fname.endswith("." + i)
-                                        for i in ignore))
+            for fname in files:
+                fpath = os.path.join(root, fname)
+                # check against the handler ignore patterns and the
+                # global FAM ignore list
+                if (not any(fname.endswith("." + i) for i in ignore) and
+                    not any(fnmatch(fpath, p)
+                            for p in self.config['ignore']) and
+                    not any(fnmatch(c, p)
+                            for p in self.config['ignore']
+                            for c in self._list_path_components(fpath))):
+                    all_files.add(fpath)
 
         # next, get a list of all files known to Cfg
         cfg_files = set()

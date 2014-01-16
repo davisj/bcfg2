@@ -31,7 +31,8 @@ class Core(BaseCore):
 
         daemon_args = dict(uid=self.setup['daemon_uid'],
                            gid=self.setup['daemon_gid'],
-                           umask=int(self.setup['umask'], 8))
+                           umask=int(self.setup['umask'], 8),
+                           detach_process=True)
         if self.setup['daemon']:
             daemon_args['pidfile'] = TimeoutPIDLockFile(self.setup['daemon'],
                                                         acquire_timeout=5)
@@ -109,7 +110,6 @@ class Core(BaseCore):
                                        keyfile=self.setup['key'],
                                        certfile=self.setup['cert'],
                                        register=False,
-                                       timeout=1,
                                        ca=self.setup['ca'],
                                        protocol=self.setup['protocol'])
         except:  # pylint: disable=W0702

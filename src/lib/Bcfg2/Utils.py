@@ -81,9 +81,6 @@ class PackedDigitRange(object):  # pylint: disable=E0012,R0924
     def __str__(self):
         return "[%s]" % self.str
 
-    def __len__(self):
-        return sum(r[1] - r[0] + 1 for r in self.ranges) + len(self.ints)
-
 
 def locked(fd):
     """ Acquire a lock on a file.
@@ -219,7 +216,9 @@ class Executor(object):
         """
         if isinstance(command, str):
             cmdstr = command
-            command = shlex.split(cmdstr)
+
+            if not shell:
+                command = shlex.split(cmdstr)
         else:
             cmdstr = " ".join(command)
         self.logger.debug("Running: %s" % cmdstr)
@@ -245,9 +244,9 @@ class Executor(object):
 
             # py3k fixes
             if not isinstance(stdout, str):
-                stdout = stdout.decode('utf-8')
+                stdout = stdout.decode('utf-8')  # pylint: disable=E1103
             if not isinstance(stderr, str):
-                stderr = stderr.decode('utf-8')
+                stderr = stderr.decode('utf-8')  # pylint: disable=E1103
 
             for line in stdout.splitlines():  # pylint: disable=E1103
                 self.logger.debug('< %s' % line)

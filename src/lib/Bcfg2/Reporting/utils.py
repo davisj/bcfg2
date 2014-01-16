@@ -1,5 +1,4 @@
 """Helper functions for reports"""
-from django.conf.urls.defaults import *
 import re
 
 """List of filters provided by filteredUrls"""

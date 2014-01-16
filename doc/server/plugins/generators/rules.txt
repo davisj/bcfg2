@@ -1,4 +1,5 @@
 .. -*- mode: rst -*-
+.. vim: ft=rst
 
 .. _server-plugins-generators-rules:
 
@@ -59,7 +60,7 @@ Rules Tag
 .. xml:element:: Rules
    :linktotype:
    :noautodep:
-   :inlinetypes: PostInstall,RContainerType
+   :inlinetypes: RContainerType
 
 Package Tag
 -----------
@@ -134,6 +135,20 @@ Attributes common to all Path tags:
    :notext:
    :onlyattrs: name,type
 
+
+augeas
+^^^^^^
+
+Run `Augeas <http://www.augeas.net>`_ commands.  See
+:ref:`client-tools-augeas` for more details.
+
+.. xml:type:: PathType
+   :nochildren:
+   :noattributegroups:
+   :nodoc:
+   :notext:
+   :onlyattrs: owner,group,mode,secontext,lens
+   :requiredattrs: owner,group,mode
 
 device
 ^^^^^^
@@ -376,6 +391,8 @@ SEModule Tag
 
 See also :ref:`server-plugins-generators-semodules`.
 
+.. _server-plugins-generators-rules-posixuser-tag:
+
 POSIXUser Tag
 -------------
 
@@ -410,6 +427,8 @@ Defaults plugin <server-plugins-structures-defaults>`.
 
 See :ref:`client-tools-posixusers` for more information on managing
 users and groups.
+
+.. _server-plugins-generators-rules-posixgroup-tag:
 
 POSIXGroup Tag
 --------------

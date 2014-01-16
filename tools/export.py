@@ -163,58 +163,6 @@ E.G. 1.2.0pre1 is a valid version.
             print(help_message)
             quit()
 
-    if version_info['build'] == '':
-        rpmchangelog = ["* %s %s <%s> %s-1\n" %
-                        (datetime.datetime.now().strftime("%a %b %d %Y"),
-                         name, email, version_release),
-                        "- New upstream release\n", "\n"]
-    else:
-        rpmchangelog = ["* %s %s <%s> %s-0.%s.%s\n" %
-                        (datetime.datetime.now().strftime("%a %b %d %Y"),
-                         name, email, version_release,
-                         version_info['build'][-1], version_info['build']),
-                        "- New upstream release\n", "\n"]
-
-    # write out the new RPM changelog
-    specs = ["misc/bcfg2.spec",
-             "misc/bcfg2-selinux.spec",
-             "redhat/bcfg2.spec.in"]
-    if options.dryrun:
-        print("*** Add the following to the top of the %%changelog section in %s:\n%s\n"
-              % (rpmchangelog, " and ".join(specs)))
-    else:
-        for fname in specs:
-            try:
-                lines = open(fname).readlines()
-                for lineno in range(len(lines)):
-                    if lines[lineno].startswith("%changelog"):
-                        break
-                else:
-                    print("No %changelog section found in %s" % fname)
-                    continue
-                for line in reversed(rpmchangelog):
-                    lines.insert(lineno + 1, line)
-                open(fname, 'w').write("".join(lines))
-            except:
-                err = sys.exc_info()[1]
-                print("Could not write %s: %s" % (fname, err))
-                print(help_message)
-                quit()
-
-    # Update redhat directory versions
-    if options.dryrun:
-        print("*** Replace redhat/VERSIONS content with '%s'."
-              % version_release)
-        print("*** Replace redhat/RELEASE content with '%s'."
-              % version_info['build'])
-    else:
-        with open('redhat/VERSION', 'w') as f:
-            f.write("%s\n" % version_release)
-        f.close()
-        with open('redhat/RELEASE', 'w') as f:
-            f.write("0.0%s\n" % version_info['build'])
-        f.close()
-
     # update solaris version
     find_and_replace('solaris/Makefile', 'VERS=',
                      'VERS=%s-1\n' % version,
@@ -235,12 +183,12 @@ E.G. 1.2.0pre1 is a valid version.
                      dryrun=options.dryrun)
     find_and_replace('solaris-ips/MANIFEST.bcfg2.header',
                      'set name=pkg.fmri value="pkg://bcfg2/bcfg2@',
-                     'set name=pkg.fmri value="pkg://bcfg2/bcfg2@%s"' % version,
+                     'set name=pkg.fmri value="pkg://bcfg2/bcfg2@%s"\n' % version,
                      startswith=True,
                      dryrun=options.dryrun)
     find_and_replace('solaris-ips/MANIFEST.bcfg2-server.header',
                      'set name=pkg.fmri value="pkg://bcfg2/bcfg2-server@',
-                     'set name=pkg.fmri value="pkg://bcfg2/bcfg2-server@%s"' % version,
+                     'set name=pkg.fmri value="pkg://bcfg2/bcfg2-server@%s"\n' % version,
                      startswith=True,
                      dryrun=options.dryrun)
     find_and_replace('solaris-ips/pkginfo.bcfg2', 'VERSION=',
@@ -263,30 +211,49 @@ E.G. 1.2.0pre1 is a valid version.
     find_and_replace('misc/bcfg2-selinux.spec', 'Version:',
                      'Version:          %s\n' % version_release,
                      dryrun=options.dryrun)
-    if version_info['build'] == '':
-        find_and_replace('misc/bcfg2.spec', 'Release: ',
-                         'Release:          1\n',
+    if version_info['build'].startswith('rc'):
+        find_and_replace('misc/bcfg2.spec', 'global _rc ',
+                         '%%global _rc %s\n' % version_info['build'],
                          dryrun=options.dryrun)
-        find_and_replace('misc/bcfg2-selinux.spec', 'Release: ',
-                         'Release:          1\n',
+        find_and_replace('misc/bcfg2-selinux.spec', 'global _rc ',
+                         '%%global _rc %s\n' % version_info['build'],
+                         dryrun=options.dryrun)
+    elif version_info['build'].startswith('pre'):
+        find_and_replace('misc/bcfg2.spec', 'global _pre ',
+                         '%%global _pre %s\n' % version_info['build'],
+                         dryrun=options.dryrun)
+        find_and_replace('misc/bcfg2-selinux.spec', 'global _pre ',
+                         '%%global _pre %s\n' % version_info['build'],
                          dryrun=options.dryrun)
     else:
+        # comment out pre/rc
+        find_and_replace('misc/bcfg2.spec', 'global _pre ',
+                         '#%%global _pre 2\n',
+                         dryrun=options.dryrun)
+        find_and_replace('misc/bcfg2-selinux.spec', 'global _pre ',
+                         '#%%global _pre 2\n',
+                         dryrun=options.dryrun)
+        find_and_replace('misc/bcfg2.spec', 'global _rc ',
+                         '#%%global _rc 1\n',
+                         dryrun=options.dryrun)
+        find_and_replace('misc/bcfg2-selinux.spec', 'global _rc ',
+                         '#%%global _rc 1\n',
+                         dryrun=options.dryrun)
+
         find_and_replace('misc/bcfg2.spec', 'Release: ',
-                         'Release:          0.%s.%s\n' %
-                         (version_info['build'][-1], version_info['build']),
+                         'Release:          1%{?_pre_rc}%{?dist}\n',
+                         startswith=True,
                          dryrun=options.dryrun)
         find_and_replace('misc/bcfg2-selinux.spec', 'Release: ',
-                         'Release:          0.%s.%s\n' %
-                         (version_info['build'][-1], version_info['build']),
+                         'Release:          1%{?_pre_rc}%{?dist}\n',
+                         startswith=True,
                          dryrun=options.dryrun)
     find_and_replace('misc/bcfg2.spec', '%setup',
-                     '%%setup -q -n %%{name}-%%{version}%s\n' %
-                     version_info['build'],
+                     '%setup -q -n %{name}-%{version}%{?_pre_rc}\n',
                      startswith=True,
                      dryrun=options.dryrun)
     find_and_replace('misc/bcfg2-selinux.spec', '%setup',
-                     '%%setup -q -n %%{name}-%%{version}%s\n' %
-                     version_info['build'],
+                     '%setup -q -n %{name}-%{version}%{?_pre_rc}\n',
                      startswith=True,
                      dryrun=options.dryrun)
     find_and_replace('misc/bcfg2.spec', 'BuildRoot',

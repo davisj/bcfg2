@@ -60,6 +60,7 @@ class Chkconfig(Bcfg2.Client.Tools.SvcTool):
         if entry.get('status') == 'ignore':
             # 'ignore' should verify
             current_svcstatus = True
+            svcstatus = True
         else:
             svcstatus = self.check_service(entry)
             if entry.get('status') == 'on':
@@ -84,16 +85,16 @@ class Chkconfig(Bcfg2.Client.Tools.SvcTool):
         """Install Service entry."""
         self.cmd.run("/sbin/chkconfig --add %s" % (entry.get('name')))
         self.logger.info("Installing Service %s" % (entry.get('name')))
-        bootstatus = entry.get('bootstatus')
+        bootstatus = self.get_bootstatus(entry)
         if bootstatus is not None:
             if bootstatus == 'on':
                 # make sure service is enabled on boot
-                bootcmd = '/sbin/chkconfig %s %s --level 0123456' % \
-                          (entry.get('name'), entry.get('bootstatus'))
+                bootcmd = '/sbin/chkconfig %s %s' % \
+                          (entry.get('name'), bootstatus)
             elif bootstatus == 'off':
                 # make sure service is disabled on boot
                 bootcmd = '/sbin/chkconfig %s %s' % (entry.get('name'),
-                                                     entry.get('bootstatus'))
+                                                     bootstatus)
             bootcmdrv = self.cmd.run(bootcmd).success
             if self.setup['servicemode'] == 'disabled':
                 # 'disabled' means we don't attempt to modify running svcs
@@ -115,8 +116,8 @@ class Chkconfig(Bcfg2.Client.Tools.SvcTool):
     def FindExtra(self):
         """Locate extra chkconfig Services."""
         allsrv = [line.split()[0]
-                  for line in self.cmd.run("/sbin/chkconfig",
-                                           "--list").stdout.splitlines()
+                  for line in
+                  self.cmd.run("/sbin/chkconfig --list").stdout.splitlines()
                   if ":on" in line]
         self.logger.debug('Found active services:')
         self.logger.debug(allsrv)

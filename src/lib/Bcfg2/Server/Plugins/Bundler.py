@@ -38,9 +38,9 @@ if HAS_GENSHI:
                              Bcfg2.Server.Plugin.StructFile):
         """ Representation of a Genshi-templated bundle XML file """
 
-        def __init__(self, name, specific, encoding):
+        def __init__(self, name, specific, encoding, fam=None):
             TemplateFile.__init__(self, name, specific, encoding)
-            Bcfg2.Server.Plugin.StructFile.__init__(self, name)
+            Bcfg2.Server.Plugin.StructFile.__init__(self, name, fam=fam)
             self.logger = logging.getLogger(name)
 
         def get_xml_value(self, metadata):
@@ -53,9 +53,9 @@ if HAS_GENSHI:
             stream = self.template.generate(
                 metadata=metadata,
                 repo=SETUP['repo']).filter(removecomment)
-            data = lxml.etree.XML(stream.render('xml',
-                                                strip_whitespace=False),
-                                  parser=Bcfg2.Server.XMLParser)
+            data = lxml.etree.XML(
+                stream.render('xml', strip_whitespace=False).encode(),
+                parser=Bcfg2.Server.XMLParser)
             bundlename = os.path.splitext(os.path.basename(self.name))[0]
             bundle = lxml.etree.Element('Bundle', name=bundlename)
             for item in self.Match(metadata, data):
@@ -106,13 +106,14 @@ class Bundler(Bcfg2.Server.Plugin.Plugin,
              nsmap['py'] == 'http://genshi.edgewall.org/')):
             if HAS_GENSHI:
                 spec = Bcfg2.Server.Plugin.Specificity()
-                return BundleTemplateFile(name, spec, self.encoding)
+                return BundleTemplateFile(name, spec, self.encoding,
+                                          fam=self.core.fam)
             else:
                 raise Bcfg2.Server.Plugin.PluginExecutionError("Genshi not "
                                                                "available: %s"
                                                                % name)
         else:
-            return BundleFile(name, self.fam)
+            return BundleFile(name, fam=self.fam)
 
     def BuildStructures(self, metadata):
         """Build all structures for client (metadata)."""

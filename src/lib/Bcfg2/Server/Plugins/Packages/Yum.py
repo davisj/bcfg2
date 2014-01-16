@@ -53,13 +53,15 @@ The Yum Backend
 import os
 import re
 import sys
+import time
 import copy
 import errno
 import socket
 import logging
 import lxml.etree
-from subprocess import Popen, PIPE
 import Bcfg2.Server.Plugin
+from lockfile import FileLock
+from Bcfg2.Utils import Executor
 # pylint: disable=W0622
 from Bcfg2.Compat import StringIO, cPickle, HTTPError, URLError, \
     ConfigParser, any
@@ -101,9 +103,6 @@ FL = '{http://linux.duke.edu/metadata/filelists}'
 
 PULPSERVER = None
 PULPCONFIG = None
-
-#: The path to bcfg2-yum-helper
-HELPER = None
 
 
 def _setup_pulp(setup):
@@ -263,6 +262,8 @@ class YumCollection(Collection):
     .. private-include: _add_gpg_instances, _get_pulp_consumer
     """
 
+    _helper = None
+
     #: Options that are included in the [packages:yum] section of the
     #: config but that should not be included in the temporary
     #: yum.conf we write out
@@ -277,18 +278,25 @@ class YumCollection(Collection):
                             debug=debug)
         self.keypath = os.path.join(self.cachepath, "keys")
 
+        #: A :class:`Bcfg2.Utils.Executor` object to use to run
+        #: external commands
+        self.cmd = Executor()
+
         if self.use_yum:
             #: Define a unique cache file for this collection to use
             #: for cached yum metadata
             self.cachefile = os.path.join(self.cachepath,
                                           "cache-%s" % self.cachekey)
-            if not os.path.exists(self.cachefile):
-                os.mkdir(self.cachefile)
 
             #: The path to the server-side config file used when
             #: resolving packages with the Python yum libraries
             self.cfgfile = os.path.join(self.cachefile, "yum.conf")
-            self.write_config()
+
+            if not os.path.exists(self.cachefile):
+                self.debug_log("Creating common cache %s" % self.cachefile)
+                os.mkdir(self.cachefile)
+                if not self.disableMetaData:
+                    self.setup_data()
         else:
             self.cachefile = None
 
@@ -309,7 +317,28 @@ class YumCollection(Collection):
                         self.logger.error("Could not create Pulp consumer "
                                           "cert directory at %s: %s" %
                                           (certdir, err))
-                self.pulp_cert_set = PulpCertificateSet(certdir, self.fam)
+                self.__class__.pulp_cert_set = PulpCertificateSet(certdir,
+                                                                  self.fam)
+
+    @property
+    def disableMetaData(self):
+        """ Report whether or not metadata processing is enabled.
+        This duplicates code in Packages/__init__.py, and can probably
+        be removed in Bcfg2 1.4 when we have a module-level setup
+        object. """
+        if self.setup is None:
+            return True
+        try:
+            return not self.setup.cfp.getboolean("packages", "resolver")
+        except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
+            return False
+        except ValueError:
+            # for historical reasons we also accept "enabled" and
+            # "disabled"
+            return self.setup.cfp.get(
+                "packages",
+                "metadata",
+                default="enabled").lower() == "disabled"
 
     @property
     def __package_groups__(self):
@@ -323,20 +352,21 @@ class YumCollection(Collection):
         a call to it; I wish there was a way to do this without
         forking, but apparently not); finally we check in /usr/sbin,
         the default location. """
-        global HELPER
-        if not HELPER:
+        if not self._helper:
+            # pylint: disable=W0212
             try:
-                HELPER = self.setup.cfp.get("packages:yum", "helper")
+                self.__class__._helper = self.setup.cfp.get("packages:yum",
+                                                            "helper")
             except (ConfigParser.NoOptionError, ConfigParser.NoSectionError):
                 # first see if bcfg2-yum-helper is in PATH
                 try:
                     self.debug_log("Checking for bcfg2-yum-helper in $PATH")
-                    Popen(['bcfg2-yum-helper'],
-                          stdin=PIPE, stdout=PIPE, stderr=PIPE).wait()
-                    HELPER = 'bcfg2-yum-helper'
+                    self.cmd.run(['bcfg2-yum-helper'])
+                    self.__class__._helper = 'bcfg2-yum-helper'
                 except OSError:
-                    HELPER = "/usr/sbin/bcfg2-yum-helper"
-        return HELPER
+                    self.__class__._helper = "/usr/sbin/bcfg2-yum-helper"
+            # pylint: enable=W0212
+        return self._helper
 
     @property
     def use_yum(self):
@@ -374,6 +404,7 @@ class YumCollection(Collection):
             # the rpmdb is so hopelessly intertwined with yum that we
             # have to totally reinvent the dependency resolver.
             mainopts = dict(cachedir='/',
+                            persistdir='/',
                             installroot=self.cachefile,
                             keepcache="0",
                             debuglevel="0",
@@ -840,6 +871,17 @@ class YumCollection(Collection):
         if not self.use_yum:
             return Collection.complete(self, packagelist)
 
+        lock = FileLock(os.path.join(self.cachefile, "lock"))
+        slept = 0
+        while lock.is_locked():
+            if slept > 30:
+                self.logger.warning("Packages: Timeout waiting for yum cache "
+                                    "to release its lock")
+                return set(), set()
+            self.logger.debug("Packages: Yum cache is locked, waiting...")
+            time.sleep(3)
+            slept += 3
+
         if packagelist:
             try:
                 result = self.call_helper(
@@ -888,40 +930,30 @@ class YumCollection(Collection):
             cmd.append("-v")
         cmd.append(command)
         self.debug_log("Packages: running %s" % " ".join(cmd))
-        try:
-            helper = Popen(cmd, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-        except OSError:
-            err = sys.exc_info()[1]
-            self.logger.error("Packages: Failed to execute %s: %s" %
-                              (" ".join(cmd), err))
-            return None
 
         if inputdata:
-            idata = json.dumps(inputdata)
-            (stdout, stderr) = helper.communicate(idata)
+            result = self.cmd.run(cmd, timeout=self.setup['client_timeout'],
+                                  inputdata=json.dumps(inputdata))
         else:
-            (stdout, stderr) = helper.communicate()
-        rv = helper.wait()
-        errlines = stderr.splitlines()
-        if rv:
-            if not errlines:
-                errlines.append("No error output")
-            self.logger.error("Packages: error running bcfg2-yum-helper "
-                              "(returned %d): %s" % (rv, errlines[0]))
-            for line in errlines[1:]:
-                self.logger.error("Packages: %s" % line)
-        elif errlines:
+            result = self.cmd.run(cmd, timeout=self.setup['client_timeout'])
+        if not result.success:
+            self.logger.error("Packages: error running bcfg2-yum-helper: %s" %
+                              result.error)
+        elif result.stderr:
             self.debug_log("Packages: debug info from bcfg2-yum-helper: %s" %
-                           errlines[0])
-            for line in errlines[1:]:
-                self.debug_log("Packages: %s" % line)
+                           result.stderr)
 
         try:
-            return json.loads(stdout)
+            return json.loads(result.stdout)
         except ValueError:
-            err = sys.exc_info()[1]
-            self.logger.error("Packages: error reading bcfg2-yum-helper "
-                              "output: %s" % err)
+            if result.stdout:
+                err = sys.exc_info()[1]
+                self.logger.error("Packages: Error reading bcfg2-yum-helper "
+                                  "output: %s" % err)
+                self.logger.error("Packages: bcfg2-yum-helper output: %s" %
+                                  result.stdout)
+            else:
+                self.logger.error("Packages: No bcfg2-yum-helper output")
             raise
 
     def setup_data(self, force_update=False):
@@ -934,8 +966,7 @@ class YumCollection(Collection):
         If using the yum Python libraries, this cleans up cached yum
         metadata, regenerates the server-side yum config (in order to
         catch any new sources that have been added to this server),
-        and then cleans up cached yum metadata again, in case the new
-        config has any preexisting cache.
+        then regenerates the yum cache.
 
         :param force_update: Ignore all local cache and setup data
                              from its original upstream sources (i.e.,
@@ -946,23 +977,22 @@ class YumCollection(Collection):
             return Collection.setup_data(self, force_update)
 
         if force_update:
-            # we call this twice: one to clean up data from the old
-            # config, and once to clean up data from the new config
+            # clean up data from the old config
             try:
                 self.call_helper("clean")
             except ValueError:
                 # error reported by call_helper
                 pass
 
-        os.unlink(self.cfgfile)
+        if os.path.exists(self.cfgfile):
+            os.unlink(self.cfgfile)
         self.write_config()
 
-        if force_update:
-            try:
-                self.call_helper("clean")
-            except ValueError:
-                # error reported by call_helper
-                pass
+        try:
+            self.call_helper("makecache")
+        except ValueError:
+            # error reported by call_helper
+            pass
 
 
 class YumSource(Source):

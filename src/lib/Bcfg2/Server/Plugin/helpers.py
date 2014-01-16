@@ -16,7 +16,7 @@ from Bcfg2.Compat import CmpMixin, wraps
 from Bcfg2.Server.Plugin.base import Debuggable, Plugin
 from Bcfg2.Server.Plugin.interfaces import Generator
 from Bcfg2.Server.Plugin.exceptions import SpecificityError, \
-    PluginExecutionError
+    PluginExecutionError, PluginInitError
 
 try:
     import django  # pylint: disable=W0611
@@ -131,6 +131,19 @@ class DatabaseBacked(Plugin):
     #: conform to the possible values that function can handle.
     option = "use_database"
 
+    def __init__(self, core, datastore):
+        Plugin.__init__(self, core, datastore)
+        use_db = self.core.setup.cfp.getboolean(self.section,
+                                                self.option,
+                                                default=False)
+        if use_db and not HAS_DJANGO:
+            raise PluginInitError("%s.%s is True but Django not found" %
+                                  (self.section, self.option))
+        elif use_db and not self.core.database_available:
+            raise PluginInitError("%s.%s is True but the database is "
+                                  "unavailable due to prior errors" %
+                                  (self.section, self.option))
+
     def _section(self):
         """ The section to look in for :attr:`DatabaseBacked.option`
         """
@@ -146,10 +159,7 @@ class DatabaseBacked(Plugin):
                                                 default=False)
         if use_db and HAS_DJANGO and self.core.database_available:
             return True
-        elif not use_db:
-            return False
         else:
-            self.logger.error("%s is true but django not found" % self.option)
             return False
 
     @property
@@ -555,16 +565,12 @@ class XMLFileBacked(FileBacked):
                 xdata = self.xdata.getroottree()
             else:
                 xdata = lxml.etree.parse(fname)
-        included = [el for el in xdata.findall('//' + xinclude)]
-        for el in included:
+        for el in xdata.findall('//' + xinclude):
             name = el.get("href")
             if name.startswith("/"):
                 fpath = name
             else:
-                if fname:
-                    rel = fname
-                else:
-                    rel = self.name
+                rel = fname or self.name
                 fpath = os.path.join(os.path.dirname(rel), name)
 
             # expand globs in xinclude, a bcfg2-specific extension
@@ -579,12 +585,13 @@ class XMLFileBacked(FileBacked):
             parent = el.getparent()
             parent.remove(el)
             for extra in extras:
-                if extra != self.name and extra not in self.extras:
-                    self.extras.append(extra)
+                if extra != self.name:
                     lxml.etree.SubElement(parent, xinclude, href=extra)
-                    self._follow_xincludes(fname=extra)
-                    if extra not in self.extra_monitors:
-                        self.add_monitor(extra)
+                    if extra not in self.extras:
+                        self.extras.append(extra)
+                        self._follow_xincludes(fname=extra)
+                        if extra not in self.extra_monitors:
+                            self.add_monitor(extra)
 
     def Index(self):
         self.xdata = lxml.etree.XML(self.data, base_url=self.name,
@@ -606,15 +613,16 @@ class XMLFileBacked(FileBacked):
 
     def add_monitor(self, fpath):
         """ Add a FAM monitor to a file that has been XIncluded.  This
-        is only done if the constructor got both a ``fam`` object and
-        ``should_monitor`` set to True.
+        is only done if the constructor got a ``fam`` object,
+        regardless of whether ``should_monitor`` is set to True (i.e.,
+        whether or not the base file is monitored).
 
         :param fpath: The full path to the file to monitor
         :type fpath: string
         :returns: None
         """
         self.extra_monitors.append(fpath)
-        if self.fam and self.should_monitor:
+        if self.fam:
             self.fam.AddMonitor(fpath, self)
 
     def __iter__(self):
@@ -832,15 +840,10 @@ class XMLSrc(XMLFileBacked):
 
     def HandleEvent(self, _=None):
         """Read file upon update."""
-        try:
-            data = open(self.name).read()
-        except IOError:
-            msg = "Failed to read file %s: %s" % (self.name, sys.exc_info()[1])
-            self.logger.error(msg)
-            raise PluginExecutionError(msg)
         self.items = {}
         try:
-            xdata = lxml.etree.XML(data, parser=Bcfg2.Server.XMLParser)
+            xdata = lxml.etree.parse(self.name,
+                                     parser=Bcfg2.Server.XMLParser).getroot()
         except lxml.etree.XMLSyntaxError:
             msg = "Failed to parse file %s: %s" % (self.name,
                                                    sys.exc_info()[1])
@@ -856,8 +859,6 @@ class XMLSrc(XMLFileBacked):
                     (xdata.get('priority'), self.name)
                 self.logger.error(msg)
                 raise PluginExecutionError(msg)
-
-        del xdata, data
 
     def Cache(self, metadata):
         """Build a package dict for a given host."""

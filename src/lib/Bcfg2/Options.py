@@ -312,11 +312,42 @@ def list_split(c_string):
     return []
 
 
+def list_split_anchored_regex(c_string):
+    """ like list_split but split on whitespace and compile each element as
+    anchored regex """
+    try:
+        return [re.compile('^' + x + '$') for x in re.split(r'\s+', c_string)]
+    except re.error:
+        raise ValueError("Not a list of regexes", c_string)
+
+
 def colon_split(c_string):
     """ split an option string on colons, returning a list """
     if c_string:
         return c_string.split(r':')
     return []
+
+
+def dict_split(c_string):
+    """ split an option string on commas, optionally surrounded by
+    whitespace and split the resulting items again on equals signs,
+    returning a dict """
+    result = dict()
+    if c_string:
+        items = re.split(r'\s*,\s*', c_string)
+        for item in items:
+            if r'=' in item:
+                key, value = item.split(r'=', 1)
+                try:
+                    result[key] = get_bool(value)
+                except ValueError:
+                    try:
+                        result[key] = get_int(value)
+                    except ValueError:
+                        result[key] = value
+            else:
+                result[item] = True
+    return result
 
 
 def get_bool(val):
@@ -619,6 +650,12 @@ SERVER_CHILDREN = \
            cf=('server', 'children'),
            cook=get_int,
            long_arg=True)
+SERVER_PROBE_ALLOWED_GROUPS = \
+    Option('Whitespace-separated list of group names (as regex) to which '
+           'probes can assign a client by writing "group:" to stdout.',
+           default=[re.compile('.*')],
+           cf=('probes', 'allowed_groups'),
+           cook=list_split_anchored_regex)
 
 # database options
 DB_ENGINE = \
@@ -651,6 +688,15 @@ DB_PORT = \
            default='',
            cf=('database', 'port'),
            deprecated_cf=('statistics', 'database_port'))
+DB_OPTIONS = \
+    Option('Database options',
+           default=dict(),
+           cf=('database', 'options'),
+           cook=dict_split)
+DB_SCHEMA = \
+    Option('Database schema',
+           default='public',
+           cf=('database', 'schema'))
 
 # Django options
 WEB_CFILE = \
@@ -1193,7 +1239,9 @@ SERVER_COMMON_OPTIONS = dict(repo=SERVER_REPOSITORY,
                              authentication=SERVER_AUTHENTICATION,
                              perflog=LOG_PERFORMANCE,
                              perflog_interval=PERFLOG_INTERVAL,
-                             children=SERVER_CHILDREN)
+                             children=SERVER_CHILDREN,
+                             client_timeout=CLIENT_TIMEOUT,
+                             probe_allowed_groups=SERVER_PROBE_ALLOWED_GROUPS)
 
 CRYPT_OPTIONS = dict(encrypt=ENCRYPT,
                      decrypt=DECRYPT,
@@ -1233,9 +1281,9 @@ DRIVER_OPTIONS = \
          yum_verify_fail_action=CLIENT_YUM_VERIFY_FAIL_ACTION,
          yum_verify_flags=CLIENT_YUM_VERIFY_FLAGS,
          posix_uid_whitelist=CLIENT_POSIX_UID_WHITELIST,
-         posix_gid_whitelist=CLIENT_POSIX_UID_WHITELIST,
+         posix_gid_whitelist=CLIENT_POSIX_GID_WHITELIST,
          posix_uid_blacklist=CLIENT_POSIX_UID_BLACKLIST,
-         posix_gid_blacklist=CLIENT_POSIX_UID_BLACKLIST)
+         posix_gid_blacklist=CLIENT_POSIX_GID_BLACKLIST)
 
 CLIENT_COMMON_OPTIONS = \
     dict(extra=CLIENT_EXTRA_DISPLAY,
@@ -1285,6 +1333,8 @@ DATABASE_COMMON_OPTIONS = dict(web_configfile=WEB_CFILE,
                                db_password=DB_PASSWORD,
                                db_host=DB_HOST,
                                db_port=DB_PORT,
+                               db_options=DB_OPTIONS,
+                               db_schema=DB_SCHEMA,
                                time_zone=DJANGO_TIME_ZONE,
                                django_debug=DJANGO_DEBUG,
                                web_prefix=DJANGO_WEB_PREFIX)

@@ -50,27 +50,36 @@ class CfgAuthorizedKeysGenerator(CfgGenerator, StructFile):
         spec = self.XMLMatch(metadata)
         rv = []
         for allow in spec.findall("Allow"):
-            params = ''
+            options = []
             if allow.find("Params") is not None:
-                params = ",".join("=".join(p)
-                                  for p in allow.find("Params").attrib.items())
+                self.logger.warning("Use of <Params> in authorized_keys.xml "
+                                    "is deprecated; use <Option> instead")
+                options.extend("=".join(p)
+                               for p in allow.find("Params").attrib.items())
+
+            for opt in allow.findall("Option"):
+                if opt.get("value"):
+                    options.append("%s=%s" % (opt.get("name"),
+                                              opt.get("value")))
+                else:
+                    options.append(opt.get("name"))
 
             pubkey_name = allow.get("from")
             if pubkey_name:
                 host = allow.get("host")
                 group = allow.get("group")
+                category = allow.get("category", self.category)
                 if host:
                     key_md = self.core.build_metadata(host)
                 elif group:
                     key_md = ClientMetadata("dummy", group, [group], [],
                                             set(), set(), dict(), None,
                                             None, None, None)
-                elif (self.category and
-                      not metadata.group_in_category(self.category)):
+                elif category and not metadata.group_in_category(category):
                     self.logger.warning("Cfg: %s ignoring Allow from %s: "
                                         "No group in category %s" %
                                         (metadata.hostname, pubkey_name,
-                                         self.category))
+                                         category))
                     continue
                 else:
                     key_md = metadata
@@ -96,6 +105,6 @@ class CfgAuthorizedKeysGenerator(CfgGenerator, StructFile):
                                     (metadata.hostname,
                                      lxml.etree.tostring(allow)))
                 continue
-            rv.append(" ".join([params, pubkey]).strip())
+            rv.append(" ".join([",".join(options), pubkey]).strip())
         return "\n".join(rv)
     get_data.__doc__ = CfgGenerator.get_data.__doc__

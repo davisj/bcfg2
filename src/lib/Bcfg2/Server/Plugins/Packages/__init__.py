@@ -9,7 +9,8 @@ import shutil
 import lxml.etree
 import Bcfg2.Logger
 import Bcfg2.Server.Plugin
-from Bcfg2.Compat import ConfigParser, urlopen, HTTPError, URLError
+from Bcfg2.Compat import ConfigParser, urlopen, HTTPError, URLError, \
+    MutableMapping
 from Bcfg2.Server.Plugins.Packages.Collection import Collection, \
     get_collection_class
 from Bcfg2.Server.Plugins.Packages.PackagesSources import PackagesSources
@@ -22,7 +23,54 @@ APT_CONFIG_DEFAULT = \
     "/etc/apt/sources.list.d/bcfg2-packages-generated-sources.list"
 
 
+class OnDemandDict(MutableMapping):
+    """ This maps a set of keys to a set of value-getting functions;
+    the values are populated on-the-fly by the functions as the values
+    are needed (and not before).  This is used by
+    :func:`Bcfg2.Server.Plugins.Packages.Packages.get_additional_data`;
+    see the docstring for that function for details on why.
+
+    Unlike a dict, you should not specify values for for the righthand
+    side of this mapping, but functions that get values.  E.g.:
+
+    .. code-block:: python
+
+        d = OnDemandDict(foo=load_foo,
+                         bar=lambda: "bar");
+    """
+
+    def __init__(self, **getters):
+        self._values = dict()
+        self._getters = dict(**getters)
+
+    def __getitem__(self, key):
+        if key not in self._values:
+            self._values[key] = self._getters[key]()
+        return self._values[key]
+
+    def __setitem__(self, key, getter):
+        self._getters[key] = getter
+
+    def __delitem__(self, key):
+        del self._values[key]
+        del self._getters[key]
+
+    def __len__(self):
+        return len(self._getters)
+
+    def __iter__(self):
+        return iter(self._getters.keys())
+
+    def __repr__(self):
+        rv = dict(self._values)
+        for key in self._getters.keys():
+            if key not in rv:
+                rv[key] = 'unknown'
+        return str(rv)
+
+
 class Packages(Bcfg2.Server.Plugin.Plugin,
+               Bcfg2.Server.Plugin.Caching,
                Bcfg2.Server.Plugin.StructureValidator,
                Bcfg2.Server.Plugin.Generator,
                Bcfg2.Server.Plugin.Connector,
@@ -45,8 +93,12 @@ class Packages(Bcfg2.Server.Plugin.Plugin,
     #: and :func:`Reload`
     __rmi__ = Bcfg2.Server.Plugin.Plugin.__rmi__ + ['Refresh', 'Reload']
 
+    __child_rmi__ = Bcfg2.Server.Plugin.Plugin.__child_rmi__ + \
+        [('Refresh', 'expire_cache'), ('Reload', 'expire_cache')]
+
     def __init__(self, core, datastore):
         Bcfg2.Server.Plugin.Plugin.__init__(self, core, datastore)
+        Bcfg2.Server.Plugin.Caching.__init__(self)
         Bcfg2.Server.Plugin.StructureValidator.__init__(self)
         Bcfg2.Server.Plugin.Generator.__init__(self)
         Bcfg2.Server.Plugin.Connector.__init__(self)
@@ -110,8 +162,21 @@ class Packages(Bcfg2.Server.Plugin.Plugin,
         #: object when one is requested, so each entry is very
         #: short-lived -- it's purged at the end of each client run.
         self.clients = dict()
-        # pylint: enable=C0301
 
+        #: groupcache caches group lookups.  It maps Collections (via
+        #: :attr:`Bcfg2.Server.Plugins.Packages.Collection.Collection.cachekey`)
+        #: to sets of package groups, and thence to the packages
+        #: indicated by those groups.
+        self.groupcache = dict()
+
+        #: pkgcache caches complete package sets.  It maps Collections
+        #: (via
+        #: :attr:`Bcfg2.Server.Plugins.Packages.Collection.Collection.cachekey`)
+        #: to sets of initial packages, and thence to the final
+        #: (complete) package selections resolved from the initial
+        #: packages
+        self.pkgcache = dict()
+        # pylint: enable=C0301
     __init__.__doc__ = Bcfg2.Server.Plugin.Plugin.__init__.__doc__
 
     def set_debug(self, debug):
@@ -355,14 +420,24 @@ class Packages(Bcfg2.Server.Plugin.Plugin,
         for el in to_remove:
             el.getparent().remove(el)
 
-        gpkgs = collection.get_groups(groups)
-        for pkgs in gpkgs.values():
+        groups.sort()
+        # check for this set of groups in the group cache
+        gkey = hash(tuple(groups))
+        if gkey not in self.groupcache[collection.cachekey]:
+            self.groupcache[collection.cachekey][gkey] = \
+                collection.get_groups(groups)
+        for pkgs in self.groupcache[collection.cachekey][gkey].values():
             base.update(pkgs)
 
         # essential pkgs are those marked as such by the distribution
         base.update(collection.get_essential())
 
-        packages, unknown = collection.complete(base)
+        # check for this set of packages in the package cache
+        pkey = hash(tuple(base))
+        if pkey not in self.pkgcache[collection.cachekey]:
+            self.pkgcache[collection.cachekey][pkey] = \
+                collection.complete(base)
+        packages, unknown = self.pkgcache[collection.cachekey][pkey]
         if unknown:
             self.logger.info("Packages: Got %d unknown entries" % len(unknown))
             self.logger.info("Packages: %s" % list(unknown))
@@ -387,6 +462,9 @@ class Packages(Bcfg2.Server.Plugin.Plugin,
         Reload configuration specification and sources """
         self._load_config()
         return True
+
+    def expire_cache(self, _=None):
+        self.Reload()
 
     def _load_config(self, force_update=False):
         """
@@ -415,9 +493,11 @@ class Packages(Bcfg2.Server.Plugin.Plugin,
             if not self.disableMetaData:
                 collection.setup_data(force_update)
 
-        # clear Collection caches
+        # clear Collection and package caches
         self.clients = dict()
         self.collections = dict()
+        self.groupcache = dict()
+        self.pkgcache = dict()
 
         for source in self.sources.entries:
             cachefiles.add(source.cachefile)
@@ -493,8 +573,12 @@ class Packages(Bcfg2.Server.Plugin.Plugin,
         if not self.sources.loaded:
             # if sources.xml has not received a FAM event yet, defer;
             # instantiate a dummy Collection object
-            return Collection(metadata, [], self.cachepath, self.data,
-                              self.core.fam)
+            collection = Collection(metadata, [], self.cachepath, self.data,
+                                    self.core.fam)
+            ckey = collection.cachekey
+            self.groupcache.setdefault(ckey, dict())
+            self.pkgcache.setdefault(ckey, dict())
+            return collection
 
         if metadata.hostname in self.clients:
             return self.collections[self.clients[metadata.hostname]]
@@ -510,7 +594,8 @@ class Packages(Bcfg2.Server.Plugin.Plugin,
         if len(sclasses) > 1:
             self.logger.warning("Packages: Multiple source types found for "
                                 "%s: %s" %
-                                ",".join([s.__name__ for s in sclasses]))
+                                (metadata.hostname,
+                                 ",".join([s.__name__ for s in sclasses])))
             cclass = Collection
         elif len(sclasses) == 0:
             self.logger.error("Packages: No sources found for %s" %
@@ -530,24 +615,47 @@ class Packages(Bcfg2.Server.Plugin.Plugin,
         if cclass != Collection:
             self.clients[metadata.hostname] = ckey
             self.collections[ckey] = collection
+        self.groupcache.setdefault(ckey, dict())
+        self.pkgcache.setdefault(ckey, dict())
         return collection
 
     def get_additional_data(self, metadata):
         """ Return additional data for the given client.  This will be
-        a dict containing a single key, ``sources``, whose value is a
-        list of data returned from
-        :func:`Bcfg2.Server.Plugins.Packages.Collection.Collection.get_additional_data`,
-        namely, a list of
-        :attr:`Bcfg2.Server.Plugins.Packages.Source.Source.url_map`
-        data.
+        an :class:`Bcfg2.Server.Plugins.Packages.OnDemandDict`
+        containing two keys:
+
+        * ``sources``, whose value is a list of data returned from
+          :func:`Bcfg2.Server.Plugins.Packages.Collection.Collection.get_additional_data`,
+          namely, a list of
+          :attr:`Bcfg2.Server.Plugins.Packages.Source.Source.url_map`
+          data; and
+        * ``get_config``, whose value is the
+          :func:`Bcfg2.Server.Plugins.Packages.Packages.get_config`
+          function, which can be used to get the Packages config for
+          other systems.
+
+        This uses an OnDemandDict instead of just a normal dict
+        because loading a source collection can be a fairly
+        time-consuming process, particularly for the first time.  As a
+        result, when all metadata objects are built at once (such as
+        after the server is restarted, or far more frequently if
+        Metadata caching is disabled), this function would be a major
+        bottleneck if we tried to build all collections at the same
+        time.  Instead, they're merely built on-demand.
 
         :param metadata: The client metadata
         :type metadata: Bcfg2.Server.Plugins.Metadata.ClientMetadata
         :return: dict of lists of ``url_map`` data
         """
-        collection = self.get_collection(metadata)
-        return dict(sources=collection.get_additional_data(),
-                    get_config=self.get_config)
+        def get_sources():
+            """ getter for the 'sources' key of the OnDemandDict
+            returned by this function.  This delays calling
+            get_collection() until it's absolutely necessary. """
+            return self.get_collection(metadata).get_additional_data()
+
+        return OnDemandDict(
+            sources=get_sources,
+            get_config=lambda: self.get_config)
 
     def end_client_run(self, metadata):
         """ Hook to clear the cache for this client in

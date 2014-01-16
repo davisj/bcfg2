@@ -232,6 +232,11 @@ class POSIXTool(Bcfg2.Client.Tools.Tool):
         else:
             defacl = None
 
+        if not acls:
+            self.logger.debug("POSIX: Removed ACLs from %s" %
+                              entry.get("name"))
+            return True
+
         for aclkey, perms in acls.items():
             atype, scope, qualifier = aclkey
             if atype == "default":
@@ -390,7 +395,10 @@ class POSIXTool(Bcfg2.Client.Tools.Tool):
             acl_str.append("user")
         elif scope == posix1e.ACL_GROUP:
             acl_str.append("group")
-        acl_str.append(qualifier)
+        if qualifier is None:
+            acl_str.append('')
+        else:
+            acl_str.append(qualifier)
         acl_str.append(self._acl_perm2string(perms))
         return ":".join(acl_str)
 
@@ -525,7 +533,8 @@ class POSIXTool(Bcfg2.Client.Tools.Tool):
             if entry.get("secontext") == "__default__":
                 try:
                     wanted_secontext = \
-                        selinux.matchpathcon(path, 0)[1].split(":")[2]
+                        selinux.matchpathcon(
+                            path, ondisk[stat.ST_MODE])[1].split(":")[2]
                 except OSError:
                     errors.append("%s has no default SELinux context" %
                                   entry.get("name"))
@@ -686,7 +695,7 @@ class POSIXTool(Bcfg2.Client.Tools.Tool):
         """ os.makedirs helpfully creates all parent directories for
         us, but it sets permissions according to umask, which is
         probably wrong.  we need to find out which directories were
-        created and set permissions on those
+        created and try to set permissions on those
         (http://trac.mcs.anl.gov/projects/bcfg2/ticket/1125 and
         http://trac.mcs.anl.gov/projects/bcfg2/ticket/1134) """
         created = []
@@ -706,22 +715,17 @@ class POSIXTool(Bcfg2.Client.Tools.Tool):
                               (path, err))
             rv = False
 
-        # we need to make sure that we give +x to everyone who needs
-        # it.  E.g., if the file that's been distributed is 0600, we
-        # can't make the parent directories 0600 also; that'd be
-        # pretty useless.  They need to be 0700.
+        # set auto-created directories to mode 755 and use best effort for
+        # permissions.  If you need something else, you should specify it in
+        # your config.
         tmpentry = copy.deepcopy(entry)
-        newmode = int(entry.get('mode'), 8)
-        for i in range(0, 3):
-            if newmode & (6 * pow(8, i)):
-                newmode |= 1 * pow(8, i)
-        tmpentry.set('mode', oct_mode(newmode))
+        tmpentry.set('mode', '0755')
         for acl in tmpentry.findall('ACL'):
             acl.set('perms',
                     oct_mode(self._norm_acl_perms(acl.get('perms')) |
                              ACL_MAP['x']))
         for cpath in created:
-            rv &= self._set_perms(tmpentry, path=cpath)
+            self._set_perms(tmpentry, path=cpath)
         return rv
 
 

@@ -220,10 +220,32 @@ class Connector(object):
 
     def get_additional_groups(self, metadata):  # pylint: disable=W0613
         """ Return a list of additional groups for the given client.
+        Each group can be either the name of a group (a string), or a
+        :class:`Bcfg2.Server.Plugins.Metadata.MetadataGroup` object
+        that defines other data besides just the name.  Note that you
+        cannot return a
+        :class:`Bcfg2.Server.Plugins.Metadata.MetadataGroup` object
+        that clobbers a group defined by another plugin; the original
+        group will be used instead.  For instance, assume the
+        following in ``Metadata/groups.xml``:
+
+        .. code-block:: xml
+
+            <Groups>
+              ...
+              <Group name="foo" public="false"/>
+            </Groups>
+
+        You could not subsequently return a
+        :class:`Bcfg2.Server.Plugins.Metadata.MetadataGroup` object
+        with ``public=True``; a warning would be issued, and the
+        original (non-public) ``foo`` group would be used.
 
         :param metadata: The client metadata
         :type metadata: Bcfg2.Server.Plugins.Metadata.ClientMetadata
-        :return: list of strings
+        :return: list of strings or
+                 :class:`Bcfg2.Server.Plugins.Metadata.MetadataGroup`
+                 objects.
         """
         return list()
 
@@ -598,3 +620,22 @@ class ClientRunHooks(object):
         :returns: None
         """
         pass
+
+
+class Caching(object):
+    """ A plugin that caches more than just the data received from the
+    FAM.  This presents a unified interface to clear the cache. """
+
+    def expire_cache(self, key=None):
+        """ Expire the cache associated with the given key.
+
+        :param key: The key to expire the cache for.  Because cache
+                    implementations vary tremendously between plugins,
+                    this could be any number of things, but generally
+                    a hostname.  It also may or may not be possible to
+                    expire the cache for a single host; this interface
+                    does not require any guarantee about that.
+        :type key: varies
+        :returns: None
+        """
+        raise NotImplementedError

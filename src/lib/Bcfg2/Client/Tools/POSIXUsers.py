@@ -146,7 +146,8 @@ class POSIXUsers(Bcfg2.Client.Tools.Tool):
         """ Get a list of supplmentary groups that the user in the
         given entry is a member of """
         return [g for g in self.existing['POSIXGroup'].values()
-                if entry.get("name") in g[3] and g[0] != entry.get("group")]
+                if entry.get("name") in g[3] and g[0] != entry.get("group")
+                and self._in_managed_range('POSIXGroup', g[2])]
 
     def VerifyPOSIXUser(self, entry, _):
         """ Verify a POSIXUser entry """
@@ -189,14 +190,18 @@ class POSIXUsers(Bcfg2.Client.Tools.Tool):
         else:
             for attr, idx in self.attr_mapping[entry.tag].items():
                 val = str(self.existing[entry.tag][entry.get("name")][idx])
-                entry.set("current_%s" % attr, val)
+                entry.set("current_%s" %
+                          attr, val.decode(self.setup['encoding']))
                 if attr in ["uid", "gid"]:
                     if entry.get(attr) is None:
                         # no uid/gid specified, so we let the tool
                         # automatically determine one -- i.e., it always
                         # verifies
                         continue
-                if val != entry.get(attr):
+                entval = entry.get(attr)
+                if not isinstance(entval, str):
+                    entval = entval.encode('utf-8')
+                if val != entval:
                     errors.append("%s for %s %s is incorrect.  Current %s is "
                                   "%s, but should be %s" %
                                   (attr.title(), entry.tag, entry.get("name"),
@@ -249,7 +254,6 @@ class POSIXUsers(Bcfg2.Client.Tools.Tool):
                 if entry.get('gid'):
                     cmd.extend(['-g', entry.get('gid')])
             elif entry.tag == 'POSIXUser':
-                cmd.append('-m')
                 if entry.get('uid'):
                     cmd.extend(['-u', entry.get('uid')])
                 cmd.extend(['-g', entry.get('group')])
