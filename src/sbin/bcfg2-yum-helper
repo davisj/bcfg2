@@ -15,7 +15,9 @@ from lockfile import FileLock, LockTimeout
 from optparse import OptionParser
 try:
     import json
-except ImportError:
+    # py2.4 json library is structured differently
+    json.loads  # pylint: disable=W0104
+except (ImportError, AttributeError):
     import simplejson as json
 
 
@@ -59,6 +61,11 @@ class YumHelper(object):
             self.yumbase._getConfig(cfgfile, debuglevel=verbose)
         # pylint: enable=E1121,W0212
         self.logger = logging.getLogger(self.__class__.__name__)
+
+    def setarch(self, arch):
+        """ Configure an arch other than the bcfg2 server arch for dep
+        resolution. """
+        self.yumbase.arch.setup_arch(arch=arch)
 
 
 class DepSolver(YumHelper):
@@ -324,6 +331,11 @@ def main():
                          sys.exc_info()[1])
             rv = 2
         try:
+            # if provided, set client arch for dependency resolution
+            arch = data.get('arch', None)
+            if arch is not None:
+                depsolver.setarch(arch)
+
             depsolver.groups = data['groups']
             (packages, unknown) = depsolver.complete(
                 [pkg_to_tuple(p) for p in data['packages']])

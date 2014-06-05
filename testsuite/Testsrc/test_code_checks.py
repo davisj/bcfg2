@@ -35,7 +35,7 @@ contingent_checks = {
                   "lib/Bcfg2/Server/Admin": ["Reports.py", "Syncdb.py"],
                   "sbin": ["bcfg2-reports"]},
     ("pyinotify",): {"lib/Bcfg2/Server/FileMonitor": ["Inotify.py"]},
-    ("yum",): {"lib/Bcfg2/Client/Tools": ["YUM*"]},
+    ("yum",): {"lib/Bcfg2/Client/Tools": ["YUM.py"]},
     ("genshi",): {"lib/Bcfg2/Server/Plugins/Cfg": ["CfgGenshiGenerator.py"]},
     ("Cheetah",): {"lib/Bcfg2/Server/Plugins/Cfg": ["CfgCheetahGenerator.py"]},
     ("M2Crypto",): {"lib/Bcfg2": ["Encryption.py"],
@@ -336,7 +336,7 @@ class TestPylint(CodeTestCase):
 
 class TestPEP8(CodeTestCase):
     __test__ = True
-    command = ["pep8", "--ignore=E125,E501"]
+    command = ["pep8", "--ignore=E125,E129,E501"]
 
     def _test_errors(self, files, extra_args=None):
         pass

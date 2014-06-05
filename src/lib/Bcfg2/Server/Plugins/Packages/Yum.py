@@ -87,7 +87,9 @@ try:
     import yum
     try:
         import json
-    except ImportError:
+        # py2.4 json library is structured differently
+        json.loads  # pylint: disable=W0104
+    except (ImportError, AttributeError):
         import simplejson as json
     HAS_YUM = True
 except ImportError:
@@ -321,7 +323,7 @@ class YumCollection(Collection):
                                                                   self.fam)
 
     @property
-    def disableMetaData(self):
+    def disableMetaData(self):  # pylint: disable=C0103
         """ Report whether or not metadata processing is enabled.
         This duplicates code in Packages/__init__.py, and can probably
         be removed in Bcfg2 1.4 when we have a module-level setup
@@ -352,8 +354,8 @@ class YumCollection(Collection):
         a call to it; I wish there was a way to do this without
         forking, but apparently not); finally we check in /usr/sbin,
         the default location. """
-        if not self._helper:
-            # pylint: disable=W0212
+        # pylint: disable=W0212
+        if not self.__class__._helper:
             try:
                 self.__class__._helper = self.setup.cfp.get("packages:yum",
                                                             "helper")
@@ -365,8 +367,8 @@ class YumCollection(Collection):
                     self.__class__._helper = 'bcfg2-yum-helper'
                 except OSError:
                     self.__class__._helper = "/usr/sbin/bcfg2-yum-helper"
-            # pylint: enable=W0212
-        return self._helper
+        return self.__class__._helper
+        # pylint: enable=W0212
 
     @property
     def use_yum(self):
@@ -426,6 +428,25 @@ class YumCollection(Collection):
                 yumconf.set("main", opt, val)
 
             yumconf.write(open(self.cfgfile, 'w'))
+
+    def get_arch(self):
+        """ If 'arch' for each source is the same, return that arch, otherwise
+        None.
+
+        This helps bcfg2-yum-helper when the client arch is
+        incompatible with the bcfg2 server's arch.
+
+        In case multiple arches are found, punt back to the default behavior.
+        """
+        arches = set()
+        for source in self:
+            for url_map in source.url_map:
+                if url_map['arch'] in self.metadata.groups:
+                    arches.add(url_map['arch'])
+        if len(arches) == 1:
+            return arches.pop()
+        else:
+            return None
 
     def get_config(self, raw=False):  # pylint: disable=W0221
         """ Get the yum configuration for this collection.
@@ -884,10 +905,12 @@ class YumCollection(Collection):
 
         if packagelist:
             try:
-                result = self.call_helper(
-                    "complete",
-                    dict(packages=list(packagelist),
-                         groups=list(self.get_relevant_groups())))
+                helper_dict = dict(packages=list(packagelist),
+                                   groups=list(self.get_relevant_groups()))
+                arch = self.get_arch()
+                if arch is not None:
+                    helper_dict['arch'] = arch
+                result = self.call_helper("complete", helper_dict)
             except ValueError:
                 # error reported by call_helper()
                 return set(), packagelist

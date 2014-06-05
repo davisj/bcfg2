@@ -82,8 +82,13 @@ def read_config(cfile=DEFAULT_CONFIG, repo=None, quiet=False):
     if repo is None:
         repo = setup['repo']
 
+    if setup['db_engine'] == 'ibm_db_django':
+        db_engine = setup['db_engine']
+    else:
+        db_engine = "django.db.backends.%s" % setup['db_engine']
+
     DATABASES['default'] = \
-        dict(ENGINE="django.db.backends.%s" % setup['db_engine'],
+        dict(ENGINE=db_engine,
              NAME=setup['db_name'],
              USER=setup['db_user'],
              PASSWORD=setup['db_password'],
@@ -154,7 +159,7 @@ MEDIA_ROOT = ''
 # trailing slash.
 STATIC_URL = '/media/'
 
-#TODO - make this unique
+# TODO - make this unique
 # Make this unique, and don't share it with anybody.
 SECRET_KEY = 'eb5+y%oy-qx*2+62vv=gtnnxg1yig_odu0se5$h0hh#pc*lmo7'
 
@@ -178,7 +183,7 @@ else:
         'django.template.loaders.app_directories.Loader',
     )
 
-#TODO - review these.  auth and sessions aren't really used
+# TODO - review these.  auth and sessions aren't really used
 MIDDLEWARE_CLASSES = (
     'django.middleware.common.CommonMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',

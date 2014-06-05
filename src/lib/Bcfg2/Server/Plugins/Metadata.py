@@ -668,7 +668,7 @@ class Metadata(Bcfg2.Server.Plugin.Metadata,
             except MetadataClientModel.DoesNotExist:
                 client = MetadataClientModel(hostname=client_name)
                 client.save()
-            self.clients = self.list_clients()
+            self.update_client_list()
             return client
         else:
             try:
@@ -721,7 +721,15 @@ class Metadata(Bcfg2.Server.Plugin.Metadata,
                                       attribs, alias=True)
 
     def list_clients(self):
-        """ List all clients in client database """
+        """ List all clients in client database.
+
+        Making ``self.clients`` a property and reading the client list
+        dynamically from the database on every call to
+        ``self.clients`` can result in very high rates of database
+        reads, so we cache the ``list_clients()`` results to reduce
+        the database load.  When the database is in use, the client
+        list is reread periodically with
+        :func:`Bcfg2.Server.Plugins.Metadata.update_client_list`. """
         if self._use_db:
             return set([c.hostname for c in MetadataClientModel.objects.all()])
         else:
@@ -772,13 +780,18 @@ class Metadata(Bcfg2.Server.Plugin.Metadata,
                 self.logger.warning(msg)
                 raise Bcfg2.Server.Plugin.MetadataConsistencyError(msg)
             client.delete()
-            self.clients = self.list_clients()
+            self.update_client_list()
         else:
             return self._remove_xdata(self.clients_xml, "Client", client_name)
 
     def _handle_clients_xml_event(self, _):  # pylint: disable=R0912
         """ handle all events for clients.xml and files xincluded from
         clients.xml """
+        # disable metadata builds during parsing.  this prevents
+        # clients from getting bogus metadata during the brief time it
+        # takes to rebuild the clients.xml data
+        self.states['clients.xml'] = False
+
         xdata = self.clients_xml.xdata
         self.clients = []
         self.clientgroups = {}
@@ -840,9 +853,9 @@ class Metadata(Bcfg2.Server.Plugin.Metadata,
                 self.clientgroups[clname].append(profile)
             except KeyError:
                 self.clientgroups[clname] = [profile]
+        self.update_client_list()
+        self.expire_cache()
         self.states['clients.xml'] = True
-        if self._use_db:
-            self.clients = self.list_clients()
 
     def _get_condition(self, element):
         """ Return a predicate that returns True if a client meets
@@ -870,7 +883,15 @@ class Metadata(Bcfg2.Server.Plugin.Metadata,
 
     def _handle_groups_xml_event(self, _):  # pylint: disable=R0912
         """ re-read groups.xml on any event on it """
+        # disable metadata builds during parsing.  this prevents
+        # clients from getting bogus metadata during the brief time it
+        # takes to rebuild the groups.xml data
+        self.states['groups.xml'] = False
+
         self.groups = {}
+        self.group_membership = dict()
+        self.negated_groups = dict()
+        self.ordered_groups = []
 
         # first, we get a list of all of the groups declared in the
         # file.  we do this in two stages because the old way of
@@ -894,10 +915,6 @@ class Metadata(Bcfg2.Server.Plugin.Metadata,
                               is_public=grp.get("public", "false") == "true")
             if grp.get('default', 'false') == 'true':
                 self.default = grp.get('name')
-
-        self.group_membership = dict()
-        self.negated_groups = dict()
-        self.ordered_groups = []
 
         # confusing loop condition; the XPath query asks for all
         # elements under a Group tag under a Groups tag; that is
@@ -931,6 +948,7 @@ class Metadata(Bcfg2.Server.Plugin.Metadata,
                 self.group_membership.setdefault(gname, [])
                 self.group_membership[gname].append(
                     self._aggregate_conditions(conditions))
+        self.expire_cache()
         self.states['groups.xml'] = True
 
     def expire_cache(self, key=None):
@@ -1434,6 +1452,32 @@ class Metadata(Bcfg2.Server.Plugin.Metadata,
         return True
     # pylint: enable=R0911,R0912
 
+    def update_client_list(self):
+        """ Re-read the client list from the database (if the database is in
+        use) """
+        if self._use_db:
+            self.logger.debug("Metadata: Re-reading client list from database")
+            old = set(self.clients)
+            self.clients = self.list_clients()
+
+            # we could do this with set.symmetric_difference(), but we
+            # want detailed numbers of added/removed clients for
+            # logging
+            new = set(self.clients)
+            added = new - old
+            removed = old - new
+            self.logger.debug("Metadata: Added %s clients: %s" %
+                              (len(added), added))
+            self.logger.debug("Metadata: Removed %s clients: %s" %
+                              (len(removed), removed))
+
+            for client in added.union(removed):
+                self.expire_cache(client)
+
+    def start_client_run(self, metadata):
+        """ Hook to reread client list if the database is in use """
+        self.update_client_list()
+
     def end_statistics(self, metadata):
         """ Hook to toggle clients in bootstrap mode """
         if self.auth.get(metadata.hostname,
@@ -1657,8 +1701,8 @@ class MetadataLint(Bcfg2.Server.Lint.ServerPlugin):
             "client")
 
     def duplicate_groups(self):
-        """ Check  for groups that  are defined more than  once. There
-        are two ways this can happen:
+        """ Check for groups that are defined more than once. There are two
+        ways this can happen:
 
         1. The group is listed twice with contradictory options.
         2. The group is listed with no options *first*, and then with
@@ -1674,7 +1718,8 @@ class MetadataLint(Bcfg2.Server.Lint.ServerPlugin):
             grpname = grp.get("name")
             if grpname in duplicates:
                 duplicates[grpname].append(grp)
-            elif len(grp.attrib) > 1:  # group has options
+            elif set(grp.attrib.keys()).difference(['negate', 'name']):
+                # group has options
                 if grpname in groups:
                     duplicates[grpname] = [grp, groups[grpname]]
                 else:
