@@ -1,14 +1,16 @@
 """Option parsing library for utilities."""
 
+import ast
 import copy
 import getopt
+import grp
 import inspect
 import os
+import pwd
 import re
 import shlex
 import sys
-import grp
-import pwd
+
 import Bcfg2.Client.Tools
 from Bcfg2.Compat import ConfigParser
 from Bcfg2.version import __version__
@@ -329,25 +331,9 @@ def colon_split(c_string):
 
 
 def dict_split(c_string):
-    """ split an option string on commas, optionally surrounded by
-    whitespace and split the resulting items again on equals signs,
-    returning a dict """
-    result = dict()
-    if c_string:
-        items = re.split(r'\s*,\s*', c_string)
-        for item in items:
-            if r'=' in item:
-                key, value = item.split(r'=', 1)
-                try:
-                    result[key] = get_bool(value)
-                except ValueError:
-                    try:
-                        result[key] = get_int(value)
-                    except ValueError:
-                        result[key] = value
-            else:
-                result[item] = True
-    return result
+    """ literally evaluate the option in order to allow for arbitrarily nested
+    dictionaries """
+    return ast.literal_eval(c_string)
 
 
 def get_bool(val):
@@ -1099,6 +1085,16 @@ CLIENT_YUM_VERIFY_FLAGS = \
            cf=('YUM', 'verify_flags'),
            deprecated_cf=('YUMng', 'verify_flags'),
            cook=list_split)
+CLIENT_YUM_DISABLED_PLUGINS = \
+    Option("YUM disabled plugins",
+           default=[],
+           cf=('YUM', 'disabled_plugins'),
+           cook=list_split)
+CLIENT_YUM_ENABLED_PLUGINS = \
+    Option("YUM enabled plugins",
+           default=[],
+           cf=('YUM', 'enabled_plugins'),
+           cook=list_split)
 CLIENT_POSIX_UID_WHITELIST = \
     Option("UID ranges the POSIXUsers tool will manage",
            default=[],
@@ -1280,6 +1276,8 @@ DRIVER_OPTIONS = \
          yum_version_fail_action=CLIENT_YUM_VERSION_FAIL_ACTION,
          yum_verify_fail_action=CLIENT_YUM_VERIFY_FAIL_ACTION,
          yum_verify_flags=CLIENT_YUM_VERIFY_FLAGS,
+         yum_disabled_plugins=CLIENT_YUM_DISABLED_PLUGINS,
+         yum_enabled_plugins=CLIENT_YUM_ENABLED_PLUGINS,
          posix_uid_whitelist=CLIENT_POSIX_UID_WHITELIST,
          posix_gid_whitelist=CLIENT_POSIX_GID_WHITELIST,
          posix_uid_blacklist=CLIENT_POSIX_UID_BLACKLIST,
@@ -1292,6 +1290,7 @@ CLIENT_COMMON_OPTIONS = \
          drivers=CLIENT_DRIVERS,
          dryrun=CLIENT_DRYRUN,
          paranoid=CLIENT_PARANOID,
+         protocol=SERVER_PROTOCOL,
          ppath=PARANOID_PATH,
          max_copies=PARANOID_MAX_COPIES,
          bundle=CLIENT_BUNDLE,

@@ -78,7 +78,7 @@ def close_db_connection(func):
         if self._database_available:  # pylint: disable=W0212
             from django import db
             self.logger.debug("%s: Closing database connection" %
-                              threading.current_thread().name)
+                              threading.current_thread().getName())
             db.close_connection()
         return rv
 
@@ -847,14 +847,14 @@ class BaseCore(object):
 
             for plug in self.plugins_by_type(Threaded):
                 plug.start_threads()
+
+            if self.debug_flag:
+                self.set_debug(None, self.debug_flag)
+            self.block_for_fam_events()
+            self._block()
         except:
             self.shutdown()
             raise
-
-        if self.debug_flag:
-            self.set_debug(None, self.debug_flag)
-        self.block_for_fam_events()
-        self._block()
 
     def _daemonize(self):
         """ Daemonize the server and write the pidfile.  This must be
